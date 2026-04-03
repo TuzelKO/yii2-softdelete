@@ -1,5 +1,9 @@
 # yii2-softdelete
 
+[![Latest Stable Version](https://poser.pugx.org/tuzelko/yii2-softdelete/v/stable.svg)](https://packagist.org/packages/tuzelko/yii2-softdelete)
+[![Total Downloads](https://poser.pugx.org/tuzelko/yii2-softdelete/downloads.svg)](https://packagist.org/packages/tuzelko/yii2-softdelete)
+[![License](https://poser.pugx.org/tuzelko/yii2-softdelete/license.svg)](https://packagist.org/packages/tuzelko/yii2-softdelete)
+
 Soft-delete extension for the [Yii2](https://www.yiiframework.com/) framework.
 
 Adds soft-delete (and restore) behaviour to any `ActiveRecord` model via a single PHP trait, with an accompanying query class that automatically hides deleted records from all queries.
