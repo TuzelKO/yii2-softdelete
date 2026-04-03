@@ -1,0 +1,41 @@
+{
+    "name": "tuzelko/yii2-softdelete",
+    "description": "Soft delete extension for Yii2 framework",
+    "type": "yii2-extension",
+    "keywords": ["yii2", "extension", "softdelete"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Eugene Frost"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "php": ">=8.0",
+        "yiisoft/yii2": "~2.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "tuzelko\\yii\\softdelete\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "yiisoft/yii2-composer": true
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "tuzelko\\yii\\softdelete\\tests\\": "tests/"
+        }
+    },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://asset-packagist.org"
+        }
+    ]
+}
