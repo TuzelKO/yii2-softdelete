@@ -2,13 +2,15 @@
 
 namespace tuzelko\yii\softdelete;
 
+use Throwable;
 use yii\base\Event;
 use yii\base\ModelEvent;
+use yii\base\NotSupportedException;
 use yii\db\Exception;
 use yii\db\Expression;
 
 /**
- * Adds soft-delete and restore behaviour to a {@see \yii\db\ActiveRecord} model.
+ * Adds soft-delete and restore behavior to a {@see \yii\db\ActiveRecord} model.
  *
  * **Requirements.** This trait relies on methods provided by `ActiveRecord` and
  * `yii\base\Component`. It MUST only be used inside a class that extends
@@ -16,7 +18,7 @@ use yii\db\Expression;
  * explicit at the PHP level, so that IDEs and static analysers catch misuse at
  * development time rather than at runtime.
  *
- * **String conditions.** `deleteAll()`, `updateAll()`, and `restoreAll()` inspect
+ * **String conditions.** `softDeleteAll()`, `updateAll()`, and `restoreAll()` inspect
  * the `$condition` argument to detect whether the soft-delete column is already
  * referenced, in order to avoid applying the automatic scope twice. This detection
  * works for array conditions (both hash-format and operator-format, including nested
@@ -24,6 +26,12 @@ use yii\db\Expression;
  * NOT inspected — parsing raw SQL is too risky for false positives. If you pass a
  * string condition that already targets the soft-delete column, wrap it in an array:
  * `['and', ['is not', 'deleted_at', null], $yourCondition]`.
+ *
+ * **Default delete routing.** {@see defaultDeleteMethod()} controls what `delete()`
+ * and `deleteAll()` do. Override it in your model to change the behaviour:
+ *   - `DELETE_METHOD_SOFT` (default) — routes to `softDelete()` / `softDeleteAll()`
+ *   - `DELETE_METHOD_HARD`           — routes to `hardDelete()` / `hardDeleteAll()`
+ *   - `DELETE_METHOD_DISABLED`       — throws {@see NotSupportedException}
  *
  * @see \yii\db\ActiveRecord
  */
@@ -41,6 +49,17 @@ trait SoftDeleteTrait
     public const EVENT_AFTER_SOFT_DELETE  = 'afterSoftDelete';
     public const EVENT_BEFORE_RESTORE     = 'beforeRestore';
     public const EVENT_AFTER_RESTORE      = 'afterRestore';
+
+    // -------------------------------------------------------------------------
+    // Delete-routing constants
+    // -------------------------------------------------------------------------
+
+    /** Route delete() / deleteAll() to softDelete() / softDeleteAll(). */
+    public const DELETE_METHOD_SOFT     = 0;
+    /** Route delete() / deleteAll() to hardDelete() / hardDeleteAll(). */
+    public const DELETE_METHOD_HARD     = 1;
+    /** Disable delete() / deleteAll() — throw NotSupportedException. */
+    public const DELETE_METHOD_DISABLED = 2;
 
     // -------------------------------------------------------------------------
     // Abstract contract — provided by yii\db\ActiveRecord and yii\base\Component
@@ -70,6 +89,19 @@ trait SoftDeleteTrait
         return self::TYPE_TIMESTAMP_INT;
     }
 
+    /**
+     * Controls what the standard `delete()` / `deleteAll()` methods do.
+     *
+     * Return one of:
+     *   - `self::DELETE_METHOD_SOFT`     — delegate to softDelete() / softDeleteAll()
+     *   - `self::DELETE_METHOD_HARD`     — delegate to hardDelete() / hardDeleteAll()
+     *   - `self::DELETE_METHOD_DISABLED` — throw NotSupportedException
+     */
+    public static function defaultDeleteMethod(): int
+    {
+        return self::DELETE_METHOD_SOFT;
+    }
+
     // -------------------------------------------------------------------------
     // Query
     // -------------------------------------------------------------------------
@@ -84,11 +116,27 @@ trait SoftDeleteTrait
     // -------------------------------------------------------------------------
 
     /**
+     * Routes to softDelete(), hardDelete(), or throws NotSupportedException
+     * depending on {@see defaultDeleteMethod()}.
+     * @throws Exception|NotSupportedException|Throwable
+     */
+    public function delete(): int|false
+    {
+        return match (static::defaultDeleteMethod()) {
+            self::DELETE_METHOD_SOFT     => $this->softDelete(),
+            self::DELETE_METHOD_HARD     => $this->hardDelete(),
+            self::DELETE_METHOD_DISABLED => throw new NotSupportedException(
+                static::class . '::delete() is disabled. Use softDelete() or hardDelete() directly.'
+            ),
+        };
+    }
+
+    /**
      * Soft-deletes the record.
      * Fires EVENT_BEFORE_SOFT_DELETE / EVENT_AFTER_SOFT_DELETE.
      * @throws Exception
      */
-    public function delete(): int|false
+    public function softDelete(): int|false
     {
         if (!$this->beforeSoftDelete()) {
             return false;
@@ -116,7 +164,7 @@ trait SoftDeleteTrait
      * Fires the standard Yii2 EVENT_BEFORE_DELETE / EVENT_AFTER_DELETE.
      * @throws Exception
      */
-    public function forceDelete(): int|false
+    public function hardDelete(): int|false
     {
         if (!$this->beforeDelete()) {
             return false;
@@ -131,6 +179,15 @@ trait SoftDeleteTrait
         $this->afterDelete();
 
         return $result;
+    }
+
+    /**
+     * @throws Exception|Throwable
+     * @deprecated Use hardDelete() instead.
+     */
+    public function forceDelete(): int|false
+    {
+        return $this->hardDelete();
     }
 
     /**
@@ -198,13 +255,29 @@ trait SoftDeleteTrait
     // -------------------------------------------------------------------------
 
     /**
+     * Routes to softDeleteAll(), hardDeleteAll(), or throws NotSupportedException
+     * depending on {@see defaultDeleteMethod()}.
+     * @throws Exception|NotSupportedException
+     */
+    public static function deleteAll($condition = '', $params = []): int
+    {
+        return match (static::defaultDeleteMethod()) {
+            self::DELETE_METHOD_SOFT     => static::softDeleteAll($condition, $params),
+            self::DELETE_METHOD_HARD     => static::hardDeleteAll($condition, $params),
+            self::DELETE_METHOD_DISABLED => throw new NotSupportedException(
+                static::class . '::deleteAll() is disabled. Use softDeleteAll() or hardDeleteAll() directly.'
+            ),
+        };
+    }
+
+    /**
      * Soft-deletes all matching records.
      *
      * The "not deleted" condition is added automatically unless $condition already
      * references the soft-delete column (checked recursively for array conditions).
      * @throws Exception
      */
-    public static function deleteAll($condition = '', $params = []): int
+    public static function softDeleteAll($condition = '', $params = []): int
     {
         $column = static::softDeleteColumn();
 
@@ -228,12 +301,20 @@ trait SoftDeleteTrait
      * Permanently deletes all matching records. No automatic scope is applied.
      * @throws Exception
      */
-    public static function forceDeleteAll($condition = '', $params = []): int
+    public static function hardDeleteAll($condition = '', $params = []): int
     {
         return static::getDb()
             ->createCommand()
             ->delete(static::tableName(), $condition ?? '', $params)
             ->execute();
+    }
+
+    /**
+     * @deprecated Use hardDeleteAll() instead.
+     */
+    public static function forceDeleteAll($condition = '', $params = []): int
+    {
+        return static::hardDeleteAll($condition, $params);
     }
 
     /**
@@ -267,8 +348,8 @@ trait SoftDeleteTrait
         $column = static::softDeleteColumn();
 
         if (!static::conditionContainsSoftDeleteColumn($condition, $column)) {
-            $deleted = static::buildDeletedCondition();
-            $condition  = !empty($condition) ? ['and', $deleted, $condition] : $deleted;
+            $deleted   = static::buildDeletedCondition();
+            $condition = !empty($condition) ? ['and', $deleted, $condition] : $deleted;
         }
 
         return static::getDb()

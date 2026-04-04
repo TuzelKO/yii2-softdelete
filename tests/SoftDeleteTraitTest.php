@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use tuzelko\yii\softdelete\tests\fixtures\Article;
 use tuzelko\yii\softdelete\tests\fixtures\Post;
 use yii\base\ModelEvent;
+use yii\base\NotSupportedException;
 use yii\db\Expression;
 
 class SoftDeleteTraitTest extends TestCase
@@ -40,6 +41,15 @@ class SoftDeleteTraitTest extends TestCase
     public function testArticleOverridesType(): void
     {
         $this->assertSame(Post::TYPE_BOOL, Article::softDeleteType());
+    }
+
+    // -------------------------------------------------------------------------
+    // defaultDeleteMethod()
+    // -------------------------------------------------------------------------
+
+    public function testDefaultDeleteMethodReturnsSoftByDefault(): void
+    {
+        $this->assertSame(Post::DELETE_METHOD_SOFT, Post::defaultDeleteMethod());
     }
 
     // -------------------------------------------------------------------------
@@ -129,11 +139,11 @@ class SoftDeleteTraitTest extends TestCase
         $this->assertFalse($post->isSoftDeleted());
     }
 
-    public function testIsSoftDeletedReturnsTrueAfterDelete(): void
+    public function testIsSoftDeletedReturnsTrueAfterSoftDelete(): void
     {
         $post = new Post(['title' => 'gone']);
         $post->save(false);
-        $post->delete();
+        $post->softDelete();
 
         $this->assertTrue($post->isSoftDeleted());
     }
@@ -142,7 +152,7 @@ class SoftDeleteTraitTest extends TestCase
     {
         $post = new Post(['title' => 'back']);
         $post->save(false);
-        $post->delete();
+        $post->softDelete();
         $post->restore();
 
         $this->assertFalse($post->isSoftDeleted());
@@ -156,26 +166,26 @@ class SoftDeleteTraitTest extends TestCase
         $this->assertFalse($article->isSoftDeleted());
     }
 
-    public function testIsSoftDeletedBoolTypeReturnsTrueAfterDelete(): void
+    public function testIsSoftDeletedBoolTypeReturnsTrueAfterSoftDelete(): void
     {
         $article = new Article(['title' => 'gone']);
         $article->save(false);
-        $article->delete();
+        $article->softDelete();
 
         $this->assertTrue($article->isSoftDeleted());
     }
 
     // -------------------------------------------------------------------------
-    // delete()
+    // softDelete()
     // -------------------------------------------------------------------------
 
-    public function testDeleteSoftDeletesRecord(): void
+    public function testSoftDeleteSoftDeletesRecord(): void
     {
         $post = new Post(['title' => 'hello']);
         $post->save(false);
         $id = $post->id;
 
-        $result = $post->delete();
+        $result = $post->softDelete();
 
         $this->assertSame(1, $result);
         $this->assertNotNull($post->deleted_at, 'Attribute on instance should be updated');
@@ -183,7 +193,7 @@ class SoftDeleteTraitTest extends TestCase
         $this->assertNotNull(Post::find()->withDeleted()->where(['id' => $id])->one());
     }
 
-    public function testDeleteFiresBeforeAndAfterEvents(): void
+    public function testSoftDeleteFiresBeforeAndAfterEvents(): void
     {
         $post = new Post(['title' => 'events']);
         $post->save(false);
@@ -198,13 +208,13 @@ class SoftDeleteTraitTest extends TestCase
             $afterFired = true;
         });
 
-        $post->delete();
+        $post->softDelete();
 
         $this->assertTrue($beforeFired);
         $this->assertTrue($afterFired);
     }
 
-    public function testDeleteReturnsFalseWhenBeforeSoftDeleteCancelled(): void
+    public function testSoftDeleteReturnsFalseWhenBeforeSoftDeleteCancelled(): void
     {
         $post = new Post(['title' => 'cancel']);
         $post->save(false);
@@ -213,30 +223,82 @@ class SoftDeleteTraitTest extends TestCase
             $event->isValid = false;
         });
 
-        $result = $post->delete();
+        $result = $post->softDelete();
 
         $this->assertFalse($result);
-        $this->assertNull($post->deleted_at, 'Attribute must not be modified on cancelled delete');
+        $this->assertNull($post->deleted_at, 'Attribute must not be modified on cancelled soft-delete');
         $this->assertNotNull(Post::findOne($post->id), 'Record must remain active');
     }
 
     // -------------------------------------------------------------------------
-    // forceDelete()
+    // delete() — routing
     // -------------------------------------------------------------------------
 
-    public function testForceDeletePermanentlyRemovesRecord(): void
+    public function testDeleteRoutesSoftDeleteByDefault(): void
+    {
+        $post = new Post(['title' => 'routed']);
+        $post->save(false);
+        $id = $post->id;
+
+        $post->delete();
+
+        $this->assertNull(Post::findOne($id), 'Default scope should hide the record');
+        $this->assertNotNull(
+            Post::find()->withDeleted()->where(['id' => $id])->one(),
+            'Record must still exist — soft-deleted, not permanently removed'
+        );
+    }
+
+    public function testDeleteRoutesToHardDeleteWhenConfigured(): void
+    {
+        $post = new class(['title' => 'hard-routed']) extends Post {
+            public static function defaultDeleteMethod(): int
+            {
+                return self::DELETE_METHOD_HARD;
+            }
+        };
+        $post->save(false);
+        $id = $post->id;
+
+        $result = $post->delete();
+
+        $this->assertSame(1, $result);
+        $count = (int) \Yii::$app->db->createCommand(
+            'SELECT COUNT(*) FROM post WHERE id = :id', [':id' => $id]
+        )->queryScalar();
+        $this->assertSame(0, $count, 'Record must be permanently removed');
+    }
+
+    public function testDeleteThrowsWhenDisabled(): void
+    {
+        $post = new class(['title' => 'disabled']) extends Post {
+            public static function defaultDeleteMethod(): int
+            {
+                return self::DELETE_METHOD_DISABLED;
+            }
+        };
+
+        $this->expectException(NotSupportedException::class);
+        $post->delete();
+    }
+
+    // -------------------------------------------------------------------------
+    // hardDelete()
+    // -------------------------------------------------------------------------
+
+    public function testHardDeletePermanentlyRemovesRecord(): void
     {
         $post = new Post(['title' => 'gone']);
         $post->save(false);
         $id = $post->id;
 
-        $result = $post->forceDelete();
+        $result = $post->hardDelete();
 
         $this->assertSame(1, $result);
         $this->assertNull(Post::find()->withDeleted()->where(['id' => $id])->one());
     }
 
-    public function testForceDeleteReturnsFalseWhenBeforeDeleteCancelled(): void
+    public function testHardDeleteReturnsFalseWhenBeforeDeleteCancelled(): void
     {
         $post = new Post(['title' => 'stay']);
         $post->save(false);
@@ -246,10 +308,22 @@ class SoftDeleteTraitTest extends TestCase
             $event->isValid = false;
         });
 
-        $result = $post->forceDelete();
+        $result = $post->hardDelete();
 
         $this->assertFalse($result);
         $this->assertNotNull(Post::find()->withDeleted()->where(['id' => $id])->one());
+    }
+
+    public function testForceDeleteIsDeprecatedAliasForHardDelete(): void
+    {
+        $post = new Post(['title' => 'alias']);
+        $post->save(false);
+        $id = $post->id;
+
+        $result = $post->forceDelete();
+
+        $this->assertSame(1, $result);
+        $this->assertNull(Post::find()->withDeleted()->where(['id' => $id])->one());
     }
 
     // -------------------------------------------------------------------------
@@ -260,7 +334,7 @@ class SoftDeleteTraitTest extends TestCase
     {
         $post = new Post(['title' => 'back']);
         $post->save(false);
-        $post->delete();
+        $post->softDelete();
 
         $result = $post->restore();
 
@@ -273,7 +347,7 @@ class SoftDeleteTraitTest extends TestCase
     {
         $post = new Post(['title' => 'restore-events']);
         $post->save(false);
-        $post->delete();
+        $post->softDelete();
 
         $beforeFired = false;
         $afterFired  = false;
@@ -295,7 +369,7 @@ class SoftDeleteTraitTest extends TestCase
     {
         $post = new Post(['title' => 'no-restore']);
         $post->save(false);
-        $post->delete();
+        $post->softDelete();
         $deletedAt = $post->deleted_at;
 
         $post->on(Post::EVENT_BEFORE_RESTORE, function (ModelEvent $event) {
@@ -312,13 +386,13 @@ class SoftDeleteTraitTest extends TestCase
     // Article instance methods (TYPE_BOOL)
     // -------------------------------------------------------------------------
 
-    public function testArticleDeleteSetsIsDeletedToOne(): void
+    public function testArticleSoftDeleteSetsIsDeletedToOne(): void
     {
         $article = new Article(['title' => 'to-delete']);
         $article->save(false);
         $id = $article->id;
 
-        $result = $article->delete();
+        $result = $article->softDelete();
 
         $this->assertSame(1, $result);
         $this->assertSame(1, (int) $article->is_deleted, 'Attribute on instance should be updated to 1');
@@ -330,7 +404,7 @@ class SoftDeleteTraitTest extends TestCase
     {
         $article = new Article(['title' => 'to-restore']);
         $article->save(false);
-        $article->delete();
+        $article->softDelete();
 
         $result = $article->restore();
 
@@ -339,13 +413,13 @@ class SoftDeleteTraitTest extends TestCase
         $this->assertNotNull(Article::findOne($article->id), 'Record should be visible with default scope again');
     }
 
-    public function testArticleForceDeletePermanentlyRemovesRecord(): void
+    public function testArticleHardDeletePermanentlyRemovesRecord(): void
     {
-        $article = new Article(['title' => 'to-force-delete']);
+        $article = new Article(['title' => 'to-hard-delete']);
         $article->save(false);
         $id = $article->id;
 
-        $result = $article->forceDelete();
+        $result = $article->hardDelete();
 
         $this->assertSame(1, $result);
         $this->assertNull(Article::find()->withDeleted()->where(['id' => $id])->one());
@@ -466,69 +540,127 @@ class SoftDeleteTraitTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // deleteAll()
+    // softDeleteAll()
     // -------------------------------------------------------------------------
 
-    public function testDeleteAllSoftDeletesAllActiveRecords(): void
+    public function testSoftDeleteAllSoftDeletesAllActiveRecords(): void
     {
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'a'])->execute();
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'b'])->execute();
 
-        $count = Post::deleteAll();
+        $count = Post::softDeleteAll();
 
         $this->assertSame(2, $count);
         $this->assertSame(0, (int) Post::find()->count());
         $this->assertSame(2, (int) Post::find()->withDeleted()->count());
     }
 
-    public function testDeleteAllIgnoresAlreadyDeletedRecords(): void
+    public function testSoftDeleteAllIgnoresAlreadyDeletedRecords(): void
     {
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'active'])->execute();
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'deleted', 'deleted_at' => 100])->execute();
 
-        $count = Post::deleteAll();
+        $count = Post::softDeleteAll();
 
         $this->assertSame(1, $count, 'Auto-scope must exclude already-deleted records');
     }
 
-    public function testDeleteAllWithCondition(): void
+    public function testSoftDeleteAllWithCondition(): void
     {
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'keep'])->execute();
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'remove'])->execute();
 
-        Post::deleteAll(['title' => 'remove']);
+        Post::softDeleteAll(['title' => 'remove']);
 
         $this->assertSame(1, (int) Post::find()->count());
         $this->assertSame('keep', Post::find()->one()->title);
     }
 
-    public function testDeleteAllSkipsAutoScopeWhenColumnAlreadyInCondition(): void
+    public function testSoftDeleteAllSkipsAutoScopeWhenColumnAlreadyInCondition(): void
     {
         // An already-deleted record. Without the conditionContainsSoftDeleteColumn check
         // the auto-scope would add "AND deleted_at IS NULL", making the condition impossible.
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'old', 'deleted_at' => 100])->execute();
 
-        $count = Post::deleteAll(['deleted_at' => 100]);
+        $count = Post::softDeleteAll(['deleted_at' => 100]);
 
         $this->assertSame(1, $count, 'Column already in condition must suppress auto-scope');
     }
 
     // -------------------------------------------------------------------------
-    // forceDeleteAll()
+    // deleteAll() — routing
     // -------------------------------------------------------------------------
 
-    public function testForceDeleteAllPermanentlyRemovesMatchingRecords(): void
+    public function testDeleteAllRoutesSoftDeleteAllByDefault(): void
+    {
+        \Yii::$app->db->createCommand()->insert('post', ['title' => 'a'])->execute();
+        \Yii::$app->db->createCommand()->insert('post', ['title' => 'b'])->execute();
+
+        Post::deleteAll();
+
+        $this->assertSame(0, (int) Post::find()->count());
+        $this->assertSame(2, (int) Post::find()->withDeleted()->count(),
+            'Records must be soft-deleted, not permanently removed'
+        );
+    }
+
+    public function testDeleteAllRoutesToHardDeleteAllWhenConfigured(): void
+    {
+        \Yii::$app->db->createCommand()->insert('post', ['title' => 'a'])->execute();
+        \Yii::$app->db->createCommand()->insert('post', ['title' => 'b'])->execute();
+
+        $proxy = new class extends Post {
+            public static function defaultDeleteMethod(): int
+            {
+                return self::DELETE_METHOD_HARD;
+            }
+        };
+        $proxy::deleteAll();
+
+        $this->assertSame(0, (int) Post::find()->withDeleted()->count(),
+            'Records must be permanently removed'
+        );
+    }
+
+    public function testDeleteAllThrowsWhenDisabled(): void
+    {
+        $proxy = new class extends Post {
+            public static function defaultDeleteMethod(): int
+            {
+                return self::DELETE_METHOD_DISABLED;
+            }
+        };
+
+        $this->expectException(NotSupportedException::class);
+        $proxy::deleteAll();
+    }
+
+    // -------------------------------------------------------------------------
+    // hardDeleteAll()
+    // -------------------------------------------------------------------------
+
+    public function testHardDeleteAllPermanentlyRemovesMatchingRecords(): void
     {
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'a', 'deleted_at' => 1])->execute();
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'b'])->execute();
 
-        Post::forceDeleteAll(['deleted_at' => 1]);
+        Post::hardDeleteAll(['deleted_at' => 1]);
 
         $this->assertSame(1, (int) Post::find()->withDeleted()->count());
         $this->assertSame('b', Post::find()->withDeleted()->one()->title);
     }
 
-    public function testForceDeleteAllWithNoConditionRemovesAll(): void
+    public function testHardDeleteAllWithNoConditionRemovesAll(): void
+    {
+        \Yii::$app->db->createCommand()->insert('post', ['title' => 'a'])->execute();
+        \Yii::$app->db->createCommand()->insert('post', ['title' => 'b', 'deleted_at' => 1])->execute();
+
+        Post::hardDeleteAll();
+
+        $this->assertSame(0, (int) Post::find()->withDeleted()->count());
+    }
+
+    public function testForceDeleteAllIsDeprecatedAliasForHardDeleteAll(): void
     {
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'a'])->execute();
         \Yii::$app->db->createCommand()->insert('post', ['title' => 'b', 'deleted_at' => 1])->execute();

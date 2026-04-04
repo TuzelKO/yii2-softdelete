@@ -12,8 +12,10 @@ Adds soft-delete (and restore) behaviour to any `ActiveRecord` model via a singl
 
 - **Three column strategies** — Unix timestamp (`int`), DB-native datetime, or boolean flag
 - **Automatic query scope** — deleted records are invisible by default; opt in with `withDeleted()` / `onlyDeleted()`
-- **Instance methods** — `delete()`, `restore()`, `forceDelete()`, `isSoftDeleted()`
-- **Bulk methods** — `deleteAll()`, `restoreAll()`, `forceDeleteAll()`, `updateAll()` (all scope-aware)
+- **Instance methods** — `softDelete()`, `hardDelete()`, `restore()`, `isSoftDeleted()`
+- **Configurable `delete()`** — routes to `softDelete()` or `hardDelete()` depending on `defaultDeleteMethod()`
+- **Bulk methods** — `softDeleteAll()`, `hardDeleteAll()`, `restoreAll()`, `updateAll()` (all scope-aware)
+- **Configurable `deleteAll()`** — same routing as `delete()`
 - **Events** — `beforeSoftDelete`, `afterSoftDelete`, `beforeRestore`, `afterRestore`
 - **Multi-database** — MySQL, PostgreSQL, SQLite, SQL Server, Oracle
 - **Zero configuration** — sensible defaults, override only what you need
@@ -87,14 +89,18 @@ class Article extends ActiveRecord
 ```php
 $post = Post::findOne(1);
 
-$post->delete();          // soft-delete — sets deleted_at, hides from default scope
+$post->softDelete();      // soft-delete — sets deleted_at, hides from default scope
 $post->isSoftDeleted();   // true
 
 $post->restore();         // clears deleted_at, record becomes visible again
 $post->isSoftDeleted();   // false
 
-$post->forceDelete();     // permanent hard-delete (fires standard Yii2 before/afterDelete events)
+$post->hardDelete();      // permanent hard-delete (fires standard Yii2 before/afterDelete events)
 ```
+
+`delete()` is a routing method — by default it calls `softDelete()`. See [Default delete routing](#default-delete-routing) to change this.
+
+> **Deprecated:** `forceDelete()` is a deprecated alias for `hardDelete()`.
 
 ## Query scopes
 
@@ -113,7 +119,7 @@ Post::find()->onlyDeleted()->all();
 
 ```php
 // Soft-delete all active records matching the condition
-Post::deleteAll(['status' => 'spam']);
+Post::softDeleteAll(['status' => 'spam']);
 
 // Restore all soft-deleted records
 Post::restoreAll();
@@ -122,13 +128,57 @@ Post::restoreAll();
 Post::restoreAll(['id' => [3, 5, 7]]);
 
 // Permanently delete all soft-deleted records
-Post::forceDeleteAll(['is not', 'deleted_at', null]);
+Post::hardDeleteAll(['is not', 'deleted_at', null]);
 
 // updateAll() also skips soft-deleted records automatically
 Post::updateAll(['status' => 'archived'], ['category_id' => 2]);
 ```
 
-> **Auto-scope behaviour:** `deleteAll()`, `updateAll()`, and `restoreAll()` automatically add a "not deleted" (or "deleted") condition unless your `$condition` already references the soft-delete column. This prevents double-applying the scope when you target records explicitly.
+`deleteAll()` is a routing method — by default it calls `softDeleteAll()`. See [Default delete routing](#default-delete-routing) to change this.
+
+> **Deprecated:** `forceDeleteAll()` is a deprecated alias for `hardDeleteAll()`.
+
+> **Auto-scope behaviour:** `softDeleteAll()`, `updateAll()`, and `restoreAll()` automatically add a "not deleted" (or "deleted") condition unless your `$condition` already references the soft-delete column. This prevents double-applying the scope when you target records explicitly.
+
+## Default delete routing
+
+`defaultDeleteMethod()` controls what `delete()` and `deleteAll()` do. Override it in your model to change the behaviour:
+
+| Constant | `delete()` behaviour | `deleteAll()` behaviour |
+|---|---|---|
+| `DELETE_METHOD_SOFT` *(default)* | calls `softDelete()` | calls `softDeleteAll()` |
+| `DELETE_METHOD_HARD` | calls `hardDelete()` | calls `hardDeleteAll()` |
+| `DELETE_METHOD_DISABLED` | throws `NotSupportedException` | throws `NotSupportedException` |
+
+```php
+class Post extends ActiveRecord
+{
+    use SoftDeleteTrait;
+
+    public static function tableName(): string { return 'post'; }
+
+    // Always route delete() to hardDelete()
+    public static function defaultDeleteMethod(): int
+    {
+        return self::DELETE_METHOD_HARD;
+    }
+}
+```
+
+```php
+class Post extends ActiveRecord
+{
+    use SoftDeleteTrait;
+
+    public static function tableName(): string { return 'post'; }
+
+    // Disable delete() entirely — callers must choose softDelete() or hardDelete() explicitly
+    public static function defaultDeleteMethod(): int
+    {
+        return self::DELETE_METHOD_DISABLED;
+    }
+}
+```
 
 ## Relations
 
@@ -238,8 +288,8 @@ All four events receive a `yii\base\ModelEvent`. Setting `$event->isValid = fals
 
 | Constant | When |
 |---|---|
-| `SoftDeleteTrait::EVENT_BEFORE_SOFT_DELETE` | Before `delete()` writes to the DB |
-| `SoftDeleteTrait::EVENT_AFTER_SOFT_DELETE` | After `delete()` succeeds |
+| `SoftDeleteTrait::EVENT_BEFORE_SOFT_DELETE` | Before `softDelete()` writes to the DB |
+| `SoftDeleteTrait::EVENT_AFTER_SOFT_DELETE` | After `softDelete()` succeeds |
 | `SoftDeleteTrait::EVENT_BEFORE_RESTORE` | Before `restore()` writes to the DB |
 | `SoftDeleteTrait::EVENT_AFTER_RESTORE` | After `restore()` succeeds |
 
@@ -251,7 +301,7 @@ $post->on(Post::EVENT_BEFORE_SOFT_DELETE, function (\yii\base\ModelEvent $event)
 });
 ```
 
-`forceDelete()` fires the standard Yii2 `ActiveRecord::EVENT_BEFORE_DELETE` / `EVENT_AFTER_DELETE` events.
+`hardDelete()` fires the standard Yii2 `ActiveRecord::EVENT_BEFORE_DELETE` / `EVENT_AFTER_DELETE` events.
 
 ## Performance
 
@@ -265,7 +315,7 @@ $this->createIndex('idx_post_deleted_at', 'post', 'deleted_at');
 $this->createIndex('idx_article_is_deleted', 'article', 'is_deleted');
 ```
 
-Without the index every `find()`, `deleteAll()`, `updateAll()`, and `restoreAll()` call will scan the whole table once it grows large.
+Without the index every `find()`, `softDeleteAll()`, `updateAll()`, and `restoreAll()` call will scan the whole table once it grows large.
 
 ## Cascade soft-deletes
 
@@ -280,7 +330,7 @@ class Post extends ActiveRecord
 
     public function afterSoftDelete(): void
     {
-        Comment::deleteAll(['post_id' => $this->id]);
+        Comment::softDeleteAll(['post_id' => $this->id]);
     }
 
     public function afterRestore(): void
@@ -292,16 +342,16 @@ class Post extends ActiveRecord
 
 ## String conditions and auto-scope
 
-`deleteAll()`, `updateAll()`, and `restoreAll()` automatically add a soft-delete scope unless your `$condition` already references the soft-delete column. This detection works for **array conditions only**. Plain SQL strings are not inspected.
+`softDeleteAll()`, `updateAll()`, and `restoreAll()` automatically add a soft-delete scope unless your `$condition` already references the soft-delete column. This detection works for **array conditions only**. Plain SQL strings are not inspected.
 
 If you pass a raw string that already targets the soft-delete column, wrap it in an array to prevent the scope from being added twice:
 
 ```php
 // ✗ scope is added twice — the string is not inspected
-Post::deleteAll("deleted_at IS NULL AND category_id = 5");
+Post::softDeleteAll("deleted_at IS NULL AND category_id = 5");
 
 // ✓ wrap in an array so the column is detected
-Post::deleteAll(['and', ['is', 'deleted_at', null], ['category_id' => 5]]);
+Post::softDeleteAll(['and', ['is', 'deleted_at', null], ['category_id' => 5]]);
 ```
 
 ## Running tests
