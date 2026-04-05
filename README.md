@@ -1,4 +1,4 @@
-# yii2-softdelete
+#  Yii2 Soft-Delete extension
 
 [![Latest Stable Version](https://poser.pugx.org/tuzelko/yii2-softdelete/v/stable.svg)](https://packagist.org/packages/tuzelko/yii2-softdelete)
 [![Total Downloads](https://poser.pugx.org/tuzelko/yii2-softdelete/downloads.svg)](https://packagist.org/packages/tuzelko/yii2-softdelete)
